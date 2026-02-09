@@ -55,3 +55,12 @@ python crawler_wordlist.py https://example.com -w 10
 - lxml for fast HTML parsing
 - beautifulsoup4
 - tqdm for progress bar
+
+## Usage Guidelines
+
+- Respect each website's `robots.txt` before crawling
+- Check the site's Terms of Service before crawling
+- Don't crawl private or authenticated content
+- Use reasonable worker counts to avoid overloading servers
+
+**Disclaimer:** This tool is provided for educational and legitimate purposes only. Users are responsible for ensuring their crawling activities comply with applicable laws and website policies.
