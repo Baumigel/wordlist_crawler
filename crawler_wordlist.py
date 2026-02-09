@@ -5,6 +5,7 @@ Web Crawler Word Extractor
 Async web crawler that crawls a website starting from a given URL,
 extracts all words from pages (letters only, lowercase),
 removes duplicates, and outputs a sorted wordlist to a text file.
+Uses hybrid approach: in-memory buffer with periodic flush to disk.
 """
 
 import asyncio
@@ -79,14 +80,18 @@ async def crawl_url(client, url, semaphore):
             return url, set(), set()
 
 
-async def crawl_async(start_url, max_depth, max_pages, workers):
-    """Main async crawl function."""
+async def crawl_async(start_url, max_depth, max_pages, workers, buffer_size, output_file):
+    """Main async crawl function with hybrid buffer approach."""
     visited = set()
     queue = deque([(normalize_url(start_url), 0)])
     visited.add(normalize_url(start_url))
     all_words = set()
 
     semaphore = asyncio.Semaphore(workers)
+
+    words_flushed = 0
+
+    outfile = open(output_file, 'w')
 
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100, keepalive_expiry=30.0)
 
@@ -119,23 +124,41 @@ async def crawl_async(start_url, max_depth, max_pages, workers):
                 if isinstance(result, tuple):
                     crawled_url, words, links = result
                     pages_crawled += 1
-                    all_words.update(words)
+
+                    new_words = words - all_words
+                    all_words.update(new_words)
 
                     for link in links:
                         if link not in visited and len(visited) < max_pages:
                             visited.add(link)
                             queue.append((link, 0))
 
+                    if len(all_words) >= buffer_size:
+                        sorted_words = sorted(all_words)
+                        for w in sorted_words:
+                            outfile.write(w + '\n')
+                        all_words.clear()
+                        words_flushed += buffer_size
+
                     if pbar:
                         pbar.update(1)
                         elapsed = time.time() - start_time
                         rate = pages_crawled / elapsed if elapsed > 0 else 0
-                        pbar.set_postfix({"words": len(all_words), "rate": f"{rate:.1f}/s"})
+                        current_count = words_flushed + len(all_words)
+                        pbar.set_postfix({"words": current_count, "rate": f"{rate:.1f}/s"})
 
         if pbar:
             pbar.close()
 
-    return pages_crawled, all_words
+    if all_words:
+        sorted_words = sorted(all_words)
+        for w in sorted_words:
+            outfile.write(w + '\n')
+
+    outfile.close()
+
+    total_words = words_flushed + len(all_words) if all_words else words_flushed
+    return pages_crawled, total_words
 
 
 def main():
@@ -145,6 +168,7 @@ def main():
     parser.add_argument("-p", "--max-pages", type=int, default=10000, help="Maximum number of pages to crawl (default: 10000)")
     parser.add_argument("-f", "--file", type=str, default="wordlist.txt", help="Output filename for wordlist (default: wordlist.txt)")
     parser.add_argument("-w", "--workers", type=int, default=5, help="Number of concurrent workers (default: 5)")
+    parser.add_argument("-b", "--buffer-size", type=int, default=50000, help="Words to collect before flushing to disk (default: 50000)")
     args = parser.parse_args()
 
     start_url = args.url
@@ -152,21 +176,17 @@ def main():
     max_pages = args.max_pages
     output_file = args.file
     workers = args.workers
+    buffer_size = args.buffer_size
 
     print(f"Starting crawl from: {start_url}")
     print(f"Max depth: {max_depth}, Max pages: {max_pages}, Workers: {workers}")
+    print(f"Buffer size: {buffer_size} words")
     print("This may take a while for large sites...")
 
-    pages_crawled, all_words = asyncio.run(crawl_async(start_url, max_depth, max_pages, workers))
+    pages_crawled, total_words = asyncio.run(crawl_async(start_url, max_depth, max_pages, workers, buffer_size, output_file))
 
     print(f"\nCrawl complete. Visited {pages_crawled} pages.")
-    print(f"Found {len(all_words)} unique words.")
-
-    sorted_words = sorted(all_words)
-    with open(output_file, 'w') as f:
-        for word in sorted_words:
-            f.write(word + '\n')
-
+    print(f"Found {total_words} unique words.")
     print(f"Wordlist saved to {output_file}")
 
 
